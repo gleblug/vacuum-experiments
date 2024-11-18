@@ -3,28 +3,36 @@ import math
 import time
 
 import pyvisa
-from hardware.interfaces import Ammeter
+from hardware.interfaces import Ammeter, Voltmeter
 from hardware.keysight_truevolt import KeysightTruevolt
 import logging
 import sys
 
 
+def nowTime() -> str:
+	return 	datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
 def writeCurrent(amp: Ammeter, filename: str):
 	value = amp.current()
-	now_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 	with open(filename, 'a') as f:
-		f.write(f'{now_time}\t{value}\n')
+		f.write(f'{nowTime()}\t{value}A\n')
 	logging.debug("measurement written")
+
+def writeVoltage(volt: Voltmeter, filename: str):
+	value = volt.voltage()
+	with open(filename, 'a') as f:
+		f.write(f'{nowTime()}\t{value}V\n')
+	logging.debug("measurement written")
+
 
 def measure():
 	filename = f"../data/keysight_data_{datetime.now().strftime("%d-%m-%Y_%H-%M-%S")}.csv"
 	keysight = KeysightTruevolt("USB0")
-	with open(filename, "w") as f:
-		f.write('time\tcurrent[A]\n')
 	logging.info("Start measuring")
 	while True:
 		try:
 			writeCurrent(keysight, filename)
+			# writeVoltage(keysight, filename)
 
 			time_until_next = (1e6 - datetime.now().microsecond) / 1e6 - keysight.measure_time
 			if time_until_next < 0:

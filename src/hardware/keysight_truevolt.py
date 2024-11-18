@@ -63,9 +63,25 @@ class KeysightTruevolt:
 			self._configure(query)
 		return self._getValueUpdRanges(query)
 
+	def voltage(self) -> float:
+		query = 'VOLT:DC'
+		if self.status != MultiStatus.voltageDC:
+			self._configure(query)
+		return self._getValueUpdRanges(query)		
+
+	@staticmethod
+	def _queryToStatus(query: str) -> MultiStatus:
+		match query:
+			case 'CURR:DC':
+				return MultiStatus.currentDC
+			case 'VOLT:DC':
+				return MultiStatus.voltageDC
+			case _:
+				return MultiStatus.unknown
+
 	def _configure(self, query: str) -> None:
 		self.instr.write(f'CONF:{query}')
-		self.status = MultiStatus.currentDC
+		self.status = self._queryToStatus(query)
 
 		self.min_range = float(self.instr.query(f'{query}:RANGE? MIN'))
 		self.max_range = float(self.instr.query(f'{query}:RANGE? MAX'))
@@ -73,8 +89,8 @@ class KeysightTruevolt:
 
 	def _getValueUpdRanges(self, query: str) -> float:
 		value = float(self.instr.query(f'MEAS:{query}? {self.cur_range:E}'))
-		if ((value > .8 * self.cur_range) and (not math.isclose(self.cur_range, self.max_range))) \
-			or ((value < .1 * self.cur_range) and (not math.isclose(self.cur_range, self.min_range))):
+		if ((value > .95 * self.cur_range) and (not math.isclose(self.cur_range, self.max_range))) \
+			or ((value < .08 * self.cur_range) and (not math.isclose(self.cur_range, self.min_range))):
 			value = float(self.instr.query(f'MEAS:{query}? AUTO'))
 			self.cur_range = float(self.instr.query(f'SENS:{query}:RANGE?'))
 		return value
