@@ -1,6 +1,8 @@
 from datetime import datetime
 import math
 import time
+
+import pyvisa
 from hardware.interfaces import Ammeter
 from hardware.keysight_truevolt import KeysightTruevolt
 import logging
@@ -12,12 +14,14 @@ def writeCurrent(amp: Ammeter, filename: str):
 	now_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 	with open(filename, 'a') as f:
 		f.write(f'{now_time}\t{value}\n')
-		
+	logging.debug("measurement written")
+
 def measure():
 	filename = f"../data/keysight_data_{datetime.now().strftime("%d-%m-%Y_%H-%M-%S")}.csv"
 	keysight = KeysightTruevolt("USB0")
 	with open(filename, "w") as f:
 		f.write('time\tcurrent[A]\n')
+	logging.info("Start measuring")
 	while True:
 		try:
 			writeCurrent(keysight, filename)
@@ -30,10 +34,18 @@ def measure():
 			logging.info("STOP")
 			return
 		except ValueError as e:
-			logging.warning("Error while parsing value", e)
+			logging.warning(f"Error while parsing value: {e}")
 			continue
+		except pyvisa.errors.VisaIOError as e:
+			logging.error("Disconnected. Trying to reconnect...")
+			if keysight.reconnect():
+				logging.error("Connected!")
+				continue
+			else:
+				logging.critical("Failed.")
+				return
 		except Exception as e:
-			logging.critical("STOP", e)
+			logging.critical(f"STOP {e}")
 			return
 
 def main():
