@@ -1,23 +1,31 @@
 from typing import Protocol
-import enum
+from enum import Enum, auto
 
-class MultiStatus(enum.Enum):
-	unknown = 0
-	currentDC = 1
-	currentAC = 2
-	voltageDC = 3
-	voltageAC = 4
-	resistance2W = 5
-	resistance4W = 6
+class Status(Enum):
+    UNKNOWN = auto()
+    CURR_DC = auto()
+    CURR_AC = auto()
+    VOLT_DC = auto()
+    VOLT_AC = auto()
+    RES_2W = auto()
+    RES_4W = auto()
 
-class Ammeter(Protocol):
-	def current(self) -> float:
-		return float("nan")
+class SCPIProxy(Protocol):
+    @staticmethod
+    def setAutoRange(instr, query: str):
+        pass
 
-class Voltmeter(Protocol):
-	def voltage(self) -> float:
-		return float("nan")
+    @staticmethod
+    def value(instr, query: str) -> float:
+        return float('nan')
 
-class Ohmmeter(Protocol):
-	def resistance(self) -> float:
-		return float("nan")
+class Meter(Protocol):
+
+    name: str
+    timeout: float
+
+    def value(self) -> float:
+        return float("nan")
+
+    def units(self) -> str:
+        return ''
