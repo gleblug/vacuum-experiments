@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import math
 from os import path
 from threading import Thread, Lock
 from dataclasses import dataclass
@@ -11,6 +12,9 @@ from hardware.interfaces import Meter
 class Measure:
     time: str
     value: float
+
+def nowTime() -> str:
+    return  datetime.now().strftime("%d.%m.%Y %H:%M:%S.%f")
 
 class Measurer:
 
@@ -29,10 +33,6 @@ class Measurer:
                 f.write(f'time\t{meter.units()}\n')
             logging.debug("measurement written")
 
-    @staticmethod
-    def nowTime() -> str:
-        return  datetime.now().strftime("%d.%m.%Y %H:%M:%S.%f")
-
     def measure(self) -> None:
         threads = []
         try:
@@ -41,10 +41,11 @@ class Measurer:
                 threads.append(th)
                 th.start()
             while True:
-                cmd = input()
+                logging.info("Start measuring")
+                input()
 
         except KeyboardInterrupt:
-            logging.info("STOP")
+            logging.error("STOP")
         except Exception as e:
             logging.critical(f"Unknown error: {e}")
 
@@ -55,11 +56,14 @@ class Measurer:
     def _processMeter(self, meter: Meter, fname: str):
         while True:
             if self.lock.locked():
-                return
+                break
             value = meter.value()
-            meas = Measure(self.nowTime(), value)
+            if math.isnan(value):
+                break
+            meas = Measure(nowTime(), value)
             self._saveMeasure(fname, meas)
             time.sleep(meter.timeout)
+        logging.info(f"Stop measuring on {meter.name}")
 
     @staticmethod
     def _saveMeasure(fname: str, meas: Measure):

@@ -2,6 +2,7 @@ from typing import Protocol
 from enum import Enum, auto
 
 class Status(Enum):
+    DISCONNECTED = auto()
     UNKNOWN = auto()
     CURR_DC = auto()
     CURR_AC = auto()
