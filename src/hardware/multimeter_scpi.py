@@ -12,44 +12,30 @@ class MultimeterSCPI:
     proxy: SCPIProxy
     timeout: float
     status: Status
-    connected: bool
-    cur_range: str
 
     def __init__(self, port: str, name: str, proxy, timeout: float = .5):
         self.port = port
         self.name = name
         self.proxy = proxy
         self.timeout = timeout
-        self.status = Status.UNKNOWN
-        self.connected = False
         self.connect()
+        logging.info(f"{name} successfully initialized!")
 
     def __del__(self):
-        if not self.connected:
-            return
-        self.instr.close()
+        self.disconnect()
 
     def connect(self):
         rm = pyvisa.ResourceManager()
         self.instr = rm.open_resource(self.port)
-        self.connected = True
+        self.status = Status.UNKNOWN
 
-    def reconnect(self) -> bool:
+    def disconnect(self):
+        self.instr.clear()
         self.instr.close()
-        attempt = 1
-        while not self.connected:
-            try:
-                time.sleep(2 ** (attempt - 1))
-                logging.info(f"Attempt {attempt}...")
-                attempt += 1
-                self.connect()
-            except RuntimeError:
-                logging.info("...failed")
-                continue
-            except pyvisa.errors.VisaIOError:
-                self.instr.close()
-                time.sleep(1)
-        return True
+        self.status = Status.DISCONNECTED
+
+    def connected(self):
+        return self.status != Status.DISCONNECTED
 
     def setMode(self, status: Status) -> None:
         if self.status == status:
@@ -57,18 +43,14 @@ class MultimeterSCPI:
         self._configure(status)
 
     def value(self) -> float:
-        value = 0
+        value = .0
         try:
-            value = self._getValueUpdRanges()
+            value = float(self.proxy.value(self.instr, self.query()))
         except ValueError as e:
             logging.warning(f"Error while parsing value: {e}")
         except pyvisa.errors.VisaIOError as e:
-            logging.error("Disconnected. Trying to reconnect...")
-            if self.reconnect():
-                logging.error("Connected!")
-            else:
-                logging.critical("Failed.")
-                raise RuntimeError(f"Cannot reconnect: {e}")
+            logging.error("Disconnected.")
+            return math.nan
         return value
 
     def units(self) -> str:
@@ -92,11 +74,3 @@ class MultimeterSCPI:
         self.instr.write(f'CONF:{self.query()}')
         # self.proxy.setAutoRange(self.instr, self.query())
         # self.cur_range = self.max_range
-
-    def _getValueUpdRanges(self) -> float:
-        value = float(self.proxy.value(self.instr, self.query()))
-        return value
-        # if ((value > .95 * float(self.cur_range)) or (value < .08 * float(self.cur_range)) and  \
-        #     self.cur_range != self.min_range and self.cur_range != self.max_range):
-        #     value = float(self.instr.query(f'MEAS:{self.query()}? AUTO'))
-        #     self.cur_range = self.instr.query(f'SENS:{self.query()}:RANGE?')
