@@ -1,13 +1,17 @@
-
+from hardware.interfaces import SCPIInstr
 
 class KeysightProxy:
     def __init__(self):
         pass
 
     @staticmethod
-    def value(instr, query: str) -> str:
-        return instr.query(f'MEAS:{query}? 1E-3')
+    def configure(instr: SCPIInstr, query: str):
+        instr.write(f'CONF:{query}')
 
     @staticmethod
-    def setAutoRange(instr, query: str):
+    def value(instr: SCPIInstr, query: str) -> str:
+        return instr.query(f'MEAS:{query}? 1E-3,3E-9')
+
+    @staticmethod
+    def setAutoRange(instr: SCPIInstr, query: str):
         instr.query(f'MEAS:{query}? AUTO')
