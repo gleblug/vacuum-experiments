@@ -32,7 +32,7 @@ def main():
 
     t = config.getfloat('Measurer', 'Timeout')
     d = config['Measurer']['Directory']
-    measurer = Measurer(directory=d, meters=meters, timeout=t)
+    measurer = Measurer(meters=meters, timeout=t, directory=d)
     measurer.measure()
 
 if __name__ == '__main__':

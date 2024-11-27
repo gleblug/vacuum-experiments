@@ -7,9 +7,6 @@ from dataclasses import dataclass
 
 from hardware.interfaces import Meter
 
-def nowTime() -> str:
-    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
-
 @dataclass
 class Measure:
     time: str
@@ -17,15 +14,14 @@ class Measure:
 
 class Measurer:
 
-    directory: str
     meters: list[tuple[Meter, str]]
     timeout: float
-    startTime: float
+    directory: str
 
-    def __init__(self, directory="../data", meters: list[Meter] = [], timeout=.5):
-        self.directory = directory
+    def __init__(self, meters: list[Meter], timeout, directory="."):
         self.meters = []
         self.timeout = timeout
+        self.directory = directory
         for meter in meters:
             fname = path.join(directory, f'{meter.name}_{datetime.now().strftime("%d-%m-%Y_%H-%M-%S")}.csv')
             self.meters.append((meter, fname))
@@ -33,13 +29,11 @@ class Measurer:
                 f.write(f'time\t{meter.units()}\n')
         logging.info(f'Measurer initialized successfully with {len(self.meters)} meters and timeout = {self.timeout}s')
 
-
     def measure(self) -> None:
         if len(self.meters) == 0:
             logging.error("There are no meters to measure!")
             return
-        logging.info("Started measuring.")
-        self.startTime = time.monotonic()
+        logging.warning(f"Started measuring. Save data to {self.directory}")
         try:
             while True:
                 threads = []
@@ -55,10 +49,10 @@ class Measurer:
             logging.error("Stopped by the user.")
         except Exception as e:
             logging.critical(f"Unknown error: {e}")
-        logging.info("Finished measuring.")
+        logging.warning("Finished measuring.")
 
     def _processMeter(self, meter: Meter, fname: str):
-        mtime = nowTime()
+        mtime = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         value = meter.value()
         meas = Measure(mtime, value)
         self._saveMeasure(fname, meas)
