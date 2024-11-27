@@ -71,6 +71,6 @@ class MultimeterSCPI:
 
     def _configure(self, status: Status) -> None:
         self.status = status
-        self.instr.write(f'CONF:{self.query()}')
+        self.proxy.configure(self.instr, self.query())
         # self.proxy.setAutoRange(self.instr, self.query())
         # self.cur_range = self.max_range

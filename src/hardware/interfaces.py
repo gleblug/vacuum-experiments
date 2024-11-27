@@ -11,7 +11,21 @@ class Status(Enum):
     RES_2W = auto()
     RES_4W = auto()
 
+class SCPIInstr(Protocol):
+    def write(self, msg: str) -> None:
+        return
+
+    def read(self) -> str:
+        return ''
+
+    def query(self, msg: str) -> str:
+        return ''
+
 class SCPIProxy(Protocol):
+    @staticmethod
+    def configure(instr, query: str):
+        pass
+
     @staticmethod
     def setAutoRange(instr, query: str):
         pass
