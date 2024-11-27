@@ -1,46 +1,51 @@
 import logging
 import math
-import time
 import pyvisa
 
 from hardware.interfaces import SCPIProxy, Status
+from hardware.keysight_proxy import KeysightProxy
+from hardware.rigol_proxy import RigolProxy
 
 class MultimeterSCPI:
 
     port: str
     name: str
-    proxy: SCPIProxy
-    timeout: float
     status: Status
+    proxy: SCPIProxy
 
-    def __init__(self, port: str, name: str, proxy, timeout: float = .5):
+    def __init__(self, port: str, name: str, status: Status):
         self.port = port
         self.name = name
-        self.proxy = proxy
-        self.timeout = timeout
-        self.connect()
-        logging.info(f"{name} successfully initialized!")
+        self.status = Status.DISCONNECTED
+        self._connect()
+        self.proxy = self._chooseProxy()
+        self._configure(status)
+        logging.debug(f"{self.name} successfully initialized on port {self.port}!")
 
     def __del__(self):
-        self.disconnect()
+        self._disconnect()
 
-    def connect(self):
+    def _chooseProxy(self) -> SCPIProxy:
+        idn = self.instr.query("*IDN?")
+        idn = idn.lower()
+        if 'keysight' in idn:
+            return KeysightProxy()
+        if 'rigol' in idn:
+            return RigolProxy()
+        raise RuntimeError('Unavailable hardware!')
+
+    def _connect(self):
         rm = pyvisa.ResourceManager()
         self.instr = rm.open_resource(self.port)
         self.status = Status.UNKNOWN
 
-    def disconnect(self):
+    def _disconnect(self):
         self.instr.clear()
         self.instr.close()
         self.status = Status.DISCONNECTED
 
     def connected(self):
         return self.status != Status.DISCONNECTED
-
-    def setMode(self, status: Status) -> None:
-        if self.status == status:
-            return
-        self._configure(status)
 
     def value(self) -> float:
         value = .0
