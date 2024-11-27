@@ -23,21 +23,20 @@ class SCPIInstr(Protocol):
 
 class SCPIProxy(Protocol):
     @staticmethod
-    def configure(instr, query: str):
+    def configure(instr: SCPIInstr, query: str) -> None:
         pass
 
     @staticmethod
-    def setAutoRange(instr, query: str):
+    def setAutoRange(instr: SCPIInstr, query: str) -> None:
         pass
 
     @staticmethod
-    def value(instr, query: str) -> float:
-        return float('nan')
+    def value(instr: SCPIInstr, query: str) -> str:
+        return ''
 
 class Meter(Protocol):
 
     name: str
-    timeout: float
 
     def value(self) -> float:
         return float("nan")
