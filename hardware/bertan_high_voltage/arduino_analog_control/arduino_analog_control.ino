@@ -5,6 +5,7 @@
 
 #define MEASURE_PIN A0
 #define SET_PIN 5
+#define POWER_PIN 6
 
 long maxVoltage = 10000;
 
@@ -32,6 +33,8 @@ Command parse_command(const String& buf) {
     return Command::READ;
   else if (buf == "SET")
     return Command::SET;
+  else if (buf == "POWER")
+    return Command::POWER;
   return Command::UNKNOWN;
 }
 
@@ -49,7 +52,7 @@ Query parse_query(const String& buf) {
 
 void query_handler(const Query& query) {
   long argInt = query.arg.toInt();
-  double ratio;
+  double ratio = 0;
   switch (query.cmd) {
   case Command::IDN:
     Serial.println("BERTAN HIGH VOLTAGE arduino analog control v0.1");
@@ -59,14 +62,26 @@ void query_handler(const Query& query) {
       maxVoltage = argInt;
     break;
   case Command::READ:
-    ratio = (double)analogRead(MEASURE_PIN) / 1024.0;
-    Serial.println(maxVoltage * ratio * 1.0636);
+  {
+    uint32_t sum = 0;
+    const size_t cnt = 20;
+    for (uint8_t i = 0; i < cnt; ++i)
+      sum += analogRead(MEASURE_PIN);
+    ratio = (double)sum / (double)cnt / 1024.0;
+    Serial.println(maxVoltage * ratio);
+  }
     break;
   case Command::SET:
     if (argInt <= maxVoltage) {
       ratio = (double)argInt / (double)maxVoltage;
       analogWrite(SET_PIN, round(ratio * 255.0));
     }
+    break;
+  case Command::POWER:
+    if (query.arg == "ON")
+      digitalWrite(POWER_PIN, HIGH);
+    if (query.arg == "OFF")
+      digitalWrite(POWER_PIN, LOW);
     break;
   case Command::UNKNOWN:
     Serial.println("UNKNOWN");
@@ -77,7 +92,10 @@ void query_handler(const Query& query) {
 void setup() {
   pinMode(MEASURE_PIN, INPUT);
   pinMode(SET_PIN, OUTPUT);
+  pinMode(POWER_PIN, OUTPUT);
   Serial.begin(9600);
+
+  digitalWrite(POWER_PIN, LOW);
 }
 
 void loop() {
