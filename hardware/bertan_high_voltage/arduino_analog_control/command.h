@@ -5,6 +5,7 @@ enum class Command {
   CONFIGURE,
   READ,
   SET,
+  POWER,
   UNKNOWN
 };
 
