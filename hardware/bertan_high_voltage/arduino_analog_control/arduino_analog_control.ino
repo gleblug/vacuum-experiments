@@ -4,13 +4,14 @@
 #define debug_print(arg) \
   if (DEBUG) Serial.println(arg)
 
-// ------> ARDUINO NANO <-------
+/* ------> ARDUINO NANO <------- */
 
 #define MEASURE_PIN A7
 #define SET_PIN 3
 #define POWER_PIN 2
 
 long maxVoltage = 10000;
+#define calib 1.054 /* SET_VALUE / REAL_VALUE = 3500 / 3320.5 */
 
 bool read_query(String& buf) {
   bool recievedFlag = false;
@@ -71,13 +72,13 @@ void query_handler(const Query& query) {
         for (uint8_t i = 0; i < cnt; ++i)
           sum += analogRead(MEASURE_PIN);
         ratio = (double)sum / (double)cnt / 1024.0;
-        Serial.println(maxVoltage * ratio);
+        Serial.println(maxVoltage * ratio / calib);
       }
       break;
     case Command::SET:
       if (argInt <= maxVoltage) {
         ratio = (double)argInt / (double)maxVoltage;
-        analogWrite(SET_PIN, round(ratio * 255.0));
+        analogWrite(SET_PIN, round(calib * ratio * 255.0));
       }
       break;
     case Command::POWER:
