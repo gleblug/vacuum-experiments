@@ -1,12 +1,13 @@
 import cv2
 import numpy as np
 from typing import Tuple, List, Optional, Union
+from collections import deque
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from skimage.morphology import skeletonize
 from scipy.interpolate import splprep, splev
-
+import heapq
 
 class VideoThread(QThread):
     """
@@ -31,6 +32,7 @@ class VideoThread(QThread):
         self.roi_selected = False
         self.original_frame = None
         self.current_mask = None
+        self.roi_buffer = deque(np.array([]), maxlen=20)
         self.current_roi = None
     
     def run(self):
@@ -72,17 +74,22 @@ class VideoThread(QThread):
         if x1 < x2 and y1 < y2:
             # Выделяем выбранную область
             roi = self.original_frame[y1:y2, x1:x2]
-            self.current_roi = roi.copy()
             
             # Проверяем, что ROI не пустой
             if roi.size > 0:
                 # Обработка ROI
-                mask = self.wire_brightness(roi)
-                self.current_mask = mask  # Сохраняем маску
+                self.roi_buffer.append(roi.copy())
+                roi_float = [img.astype(np.float32) for img in self.roi_buffer]
+                average_roi = sum(roi_float) / len(roi_float)
+                average_roi = average_roi.astype(np.uint8)
+                self.current_roi = average_roi
+
+                mask = self.wire_brightness(self.current_roi) # Сохраняем маску
+                self.current_mask = mask
                 
                 # Отправляем сигнал с ROI и маской
                 if mask is not None:
-                    self.roi_signal.emit(roi, mask)
+                    self.roi_signal.emit(average_roi, mask)
                     
                     # Отправляем маску для отображения
                     # Преобразуем маску в цветное изображение для лучшей визуализации
@@ -165,6 +172,7 @@ class VideoThread(QThread):
             self.end_x, self.end_y = x, y
         
         elif event_type == "release":
+            self.roi_buffer.clear()
             self.end_x, self.end_y = x, y
             # Проверяем, что выделена реальная область, а не точка
             if abs(self.end_x - self.start_x) > 5 and abs(self.end_y - self.start_y) > 5:
@@ -180,14 +188,9 @@ class VideoThread(QThread):
         self.running = False
         self.wait()
 
-
 class ThreadBrightnessAnalyzer(QThread):
     """
-    Поток для анализа яркости нити
-    
-    Сигналы:
-        update_plot_signal: Передает данные для обновления графика
-        update_image_signal: Передает визуализацию результата анализа
+    Поток для анализа яркости нити, создающий сплайн по самым ярким участкам нити
     """
     update_plot_signal = pyqtSignal(np.ndarray, np.ndarray)
     update_image_signal = pyqtSignal(np.ndarray)
@@ -201,13 +204,7 @@ class ThreadBrightnessAnalyzer(QThread):
         self.result_image = None
     
     def set_data(self, roi: np.ndarray, mask: np.ndarray) -> None:
-        """
-        Устанавливает данные для анализа
-        
-        Args:
-            roi: Область интереса (изображение)
-            mask: Бинарная маска нити
-        """
+        """Устанавливает данные для анализа"""
         self.roi = roi
         self.mask = mask
     
@@ -227,277 +224,363 @@ class ThreadBrightnessAnalyzer(QThread):
             
             self.msleep(100)
 
-    def analyze(self, image: np.ndarray, wire_mask: np.ndarray, thickness: int = 3) -> Tuple[Optional[Tuple[np.ndarray, np.ndarray]], Optional[np.ndarray]]:
+    def analyze(self, image: np.ndarray, wire_mask: np.ndarray, thickness: int = 3) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Анализирует изображение и строит график яркости вдоль нити
         
         Args:
             image: Входное изображение
-            thread_mask: Бинарная маска нити
+            wire_mask: Бинарная маска нити
             thickness: Толщина линии для измерения яркости
             
         Returns:
             Кортеж из (distances, brightness_values)
-        """        
-        # Получаем скелет маски нити
-        skeleton = self._get_skeleton(wire_mask)
+        """
+        # Преобразуем изображение в оттенки серого, если оно цветное
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
         
-        # Получаем упорядоченные точки центральной линии нити
-        centerline_points = self._get_centerline_points(skeleton)
-        
-        # Аппроксимируем центральную линию сплайном
-        smoothed_points = self._smooth_centerline(centerline_points)
-        
-        # Если недостаточно точек, выходим
-        if smoothed_points is None or len(smoothed_points[0]) < 2:
+        # Находим начальные и конечные точки нити
+        endpoints = self._find_endpoints(wire_mask)
+        if endpoints is None:
             return None, None
         
-        # Измеряем яркость вдоль аппроксимированной центральной линии
-        distances, brightness_values, bright_points = self._measure_brightness(image, smoothed_points, thickness)
+        # Находим путь по ярким точкам с учетом инерции движения
+        path_points = self._find_bright_path(gray, wire_mask, endpoints)
+        if path_points is None or len(path_points) < 2:
+            return None, None
+        
+        # Упрощаем путь перед сглаживанием
+        # simplified_path = self._simplify_path(path_points)
+        
+        # Сглаживаем путь
+        smoothed_path = self._smooth_path(path_points)
+        if smoothed_path is None:
+            return None, None
+        
+        # Измеряем яркость вдоль сглаженного пути
+        distances, brightness_values = self._measure_brightness_along_path(gray, smoothed_path, thickness)
         
         # Визуализируем результаты
-        vis_image = self._visualize_results(image, bright_points)
-        self.result_image = vis_image.copy()  # Сохраняем для будущего использования
+        vis_image = self._visualize_results(image, smoothed_path, endpoints)
+        self.result_image = vis_image.copy()
         self.update_image_signal.emit(vis_image)
         
         return distances, brightness_values
-
-    def _measure_brightness(self, image: np.ndarray, smoothed_points: Tuple[np.ndarray, np.ndarray], thickness: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    
+    def _find_endpoints(self, mask: np.ndarray) -> Optional[Tuple[tuple, tuple]]:
         """
-        Измеряет яркость изображения вдоль самых ярких точек нити
-        
-        Args:
-            image: Изображение
-            smoothed_points: Кортеж из массивов x и y координат
-            thickness: Толщина области для поиска самого яркого пикселя
-            
-        Returns:
-            Кортеж из массивов расстояний, значений яркости и координат ярких точек
-        """
-        # Конвертируем в grayscale, если изображение цветное
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        
-        x_points, y_points = smoothed_points
-        num_points = len(x_points)
-        brightness = np.zeros(num_points)
-        
-        # Создаем массив для хранения координат ярких точек
-        bright_points = np.zeros((num_points, 2), dtype=np.float32)
-        
-        # Вычисляем расстояние вдоль нити
-        dx = np.diff(x_points)
-        dy = np.diff(y_points)
-        segment_lengths = np.sqrt(dx**2 + dy**2)
-        distances = np.zeros(num_points)
-        distances[1:] = np.cumsum(segment_lengths)
-        
-        # Вычисляем направление нити для определения перпендикуляра
-        directions = np.zeros((num_points, 2))
-        directions[:-1, 0] = dx / (segment_lengths + 1e-10)
-        directions[:-1, 1] = dy / (segment_lengths + 1e-10)
-        directions[-1] = directions[-2]  # Для последней точки используем предыдущее направление
-        
-        # Вычисляем перпендикулярные векторы
-        perpendicular = np.zeros_like(directions)
-        perpendicular[:, 0] = -directions[:, 1]  # перпендикулярный x = -y
-        perpendicular[:, 1] = directions[:, 0]   # перпендикулярный y = x
-        
-        # Для каждой точки центральной линии ищем самую яркую точку поперек нити
-        search_radius = max(thickness * 2, 5)  # Область поиска
-        
-        for i in range(num_points):
-            x_center, y_center = int(round(x_points[i])), int(round(y_points[i]))
-            
-            # Проверяем границы изображения
-            if not (0 <= x_center < gray.shape[1] and 0 <= y_center < gray.shape[0]):
-                bright_points[i] = [x_center, y_center]  # Используем исходную точку
-                continue
-            
-            # Ищем самую яркую точку в перпендикулярном направлении
-            perp_x, perp_y = perpendicular[i]
-            max_brightness = 0
-            max_x, max_y = x_center, y_center
-            
-            for offset in range(-search_radius, search_radius + 1):
-                x = int(round(x_center + offset * perp_x))
-                y = int(round(y_center + offset * perp_y))
-                
-                if 0 <= x < gray.shape[1] and 0 <= y < gray.shape[0]:
-                    pixel_value = gray[y, x]
-                    if pixel_value > max_brightness:
-                        max_brightness = pixel_value
-                        max_x, max_y = x, y
-            
-            bright_points[i] = [max_x, max_y]  # Сохраняем координаты яркой точки
-            
-            # Измеряем окончательную яркость в небольшой области вокруг найденной яркой точки
-            window_size = min(3, thickness)
-            x_min = max(0, max_x - window_size // 2)
-            x_max = min(gray.shape[1], max_x + window_size // 2 + 1)
-            y_min = max(0, max_y - window_size // 2)
-            y_max = min(gray.shape[0], max_y + window_size // 2 + 1)
-            
-            region = gray[y_min:y_max, x_min:x_max]
-            if region.size > 0:
-                brightness[i] = np.mean(region)
-        
-        return distances, brightness, bright_points
-
-    def _get_skeleton(self, mask: np.ndarray) -> np.ndarray:
-        """
-        Получает скелет маски нити
+        Находит две конечные точки нити на маске
         
         Args:
             mask: Бинарная маска нити
-            
-        Returns:
-            Скелетизированная маска
-        """
-        binary_mask = mask.astype(bool)
-        skeleton = skeletonize(binary_mask)
-        return skeleton.astype(np.uint8) * 255
-    
-    def _get_centerline_points(self, skeleton: np.ndarray) -> np.ndarray:
-        """
-        Извлекает и упорядочивает точки центральной линии
         
-        Args:
-            skeleton: Скелетизированная маска
-            
         Returns:
-            Массив координат точек центральной линии
+            Кортеж из двух точек (начало, конец) или None
         """
-        # Находим точки скелета
-        y_coords, x_coords = np.where(skeleton > 0)
-        
+        # Находим точки маски
+        y_coords, x_coords = np.where(mask > 0)
         if len(x_coords) == 0:
-            return np.array([])
-            
+            return None
+        
         # Объединяем координаты
         points = np.column_stack((x_coords, y_coords))
         
-        # Находим две наиболее удаленные точки (концы нити)
-        max_dist = 0
-        endpoints = None
+        # Находим две наиболее удаленные точки с помощью алгоритма диаметра точечного множества
+        # Сначала выбираем произвольную точку p
+        p = points[0]
+        # Находим самую удаленную точку от p - это будет первая конечная точка
+        distances = np.sum((points - p) ** 2, axis=1)
+        endpoint1_idx = np.argmax(distances)
+        endpoint1 = (int(points[endpoint1_idx][0]), int(points[endpoint1_idx][1]))
         
-        # Если много точек, выбираем подмножество для ускорения
-        if len(points) > 100:
-            subset = points[np.random.choice(len(points), 100, replace=False)]
-        else:
-            subset = points
-            
-        for i in range(len(subset)):
-            for j in range(i+1, len(subset)):
-                dist = np.sum((subset[i] - subset[j])**2)
-                if dist > max_dist:
-                    max_dist = dist
-                    endpoints = (subset[i], subset[j])
+        # Находим самую удаленную точку от endpoint1 - это будет вторая конечная точка
+        distances = np.sum((points - points[endpoint1_idx]) ** 2, axis=1)
+        endpoint2_idx = np.argmax(distances)
+        endpoint2 = (int(points[endpoint2_idx][0]), int(points[endpoint2_idx][1]))
         
-        if endpoints is None:
-            return points
-            
-        # Ищем путь между концами нити
-        ordered_points = self._find_path_between_endpoints(skeleton, endpoints)
-        
-        return np.array(ordered_points)
+        return (endpoint1, endpoint2)
     
-    def _find_path_between_endpoints(self, skeleton: np.ndarray, endpoints: Tuple[np.ndarray, np.ndarray]) -> List[Tuple[int, int]]:
+    def _create_weight_matrix(self, gray_image: np.ndarray, mask: np.ndarray, 
+                            kernel_size: int = 5, 
+                            edge_sensitivity: float = 7.0,
+                            max_edge_penalty: float = 1.7,
+                            center_preference_strength: float = 0.4) -> np.ndarray:
         """
-        Находит путь между двумя концами нити на скелете
+        Создает матрицу весов, комбинируя яркость и расстояние до границы
         
         Args:
-            skeleton: Скелетизированная маска
-            endpoints: Кортеж из двух точек - начало и конец нити
-            
+            gray_image: Изображение в оттенках серого
+            mask: Бинарная маска нити
+            kernel_size: Размер ядра для вычисления локальной вариации (нечетное число)
+            edge_sensitivity: Чувствительность к разнице яркости (меньше = более чувствительно)
+            max_edge_penalty: Максимальный штраф за краевые пиксели
+            center_preference_strength: Сила предпочтения центральных пикселей (0-1)
+        
         Returns:
-            Список точек пути
+            Матрица весов
+        """
+        # Базовые веса, обратно пропорциональные яркости
+        weight_matrix = 255.0 / (gray_image.astype(float) + 1)
+        
+        # 1. Вычисляем локальную вариацию яркости (для определения краев)
+        kernel = np.ones((kernel_size, kernel_size), dtype=float)
+        kernel[kernel_size//2, kernel_size//2] = 0  # Исключаем центральный пиксель
+        kernel = kernel / np.sum(kernel)  # Нормализуем
+        neighbor_avg = cv2.filter2D(gray_image.astype(float), -1, kernel)
+        brightness_diff = abs(gray_image.astype(float) - neighbor_avg)
+        
+        # 2. Вычисляем расстояние до границы
+        dist_transform = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        max_dist = np.max(dist_transform)
+        if max_dist > 0:
+            normalized_dist = dist_transform / max_dist
+        else:
+            normalized_dist = dist_transform
+        
+        # Комбинируем факторы:
+        # - Штрафуем пиксели с большой локальной вариацией (вероятные края)
+        edge_penalty = np.clip(brightness_diff / edge_sensitivity, 0, max_edge_penalty)
+        # - Предпочитаем пиксели ближе к центру нити
+        center_preference = 1.0 - center_preference_strength * normalized_dist
+        
+        # Итоговая матрица весов
+        weight_matrix = weight_matrix * (1.0 + edge_penalty) * center_preference
+        
+        # Вне маски устанавливаем очень высокие веса
+        weight_matrix[mask == 0] = 1000
+        
+        return weight_matrix
+
+    def _find_bright_path(self, gray_image: np.ndarray, mask: np.ndarray, endpoints: Tuple[tuple, tuple]) -> Optional[np.ndarray]:
+        """
+        Находит путь по самым ярким участкам нити между двумя точками
+        
+        Args:
+            gray_image: Изображение в оттенках серого
+            mask: Бинарная маска нити
+            endpoints: Кортеж из двух точек (начало, конец)
+        
+        Returns:
+            Массив точек пути или None
         """
         start, end = endpoints
-        start = tuple(start)
-        end = tuple(end)
         
-        # Создаем копию скелета для поиска пути
-        visited = np.zeros_like(skeleton, dtype=bool)
-        queue = [(start, [start])]
-        visited[start[1], start[0]] = True
+        # Создаем матрицу весов, где вес обратно пропорционален яркости
+        # Добавляем небольшое значение, чтобы избежать деления на ноль
+        weight_matrix = self._create_weight_matrix(gray_image, mask)
         
-        # Смещения для 8-связных соседей
-        neighbors = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+        # Применяем алгоритм Дейкстры для поиска пути с минимальным весом
+        height, width = gray_image.shape
         
+        # Создаем массив посещенных точек и матрицу расстояний
+        visited = np.zeros((height, width), dtype=bool)
+        distances = np.full((height, width), np.inf)
+        distances[start[1], start[0]] = 0
+        
+        # Создаем матрицу предшественников для восстановления пути
+        predecessors = np.zeros((height, width, 2), dtype=int)
+        
+        # Инициализируем очередь с приоритетом - (расстояние, x, y)
+        queue = [(0, start[0], start[1])]
+        
+        # Направления для 8-соседей
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        
+        # Выполняем алгоритм Дейкстры
         while queue:
-            (x, y), path = queue.pop(0)
+            dist, x, y = heapq.heappop(queue)
             
-            # Если дошли до конечной точки
+            # Если уже посещали эту точку, пропускаем
+            if visited[y, x]:
+                continue
+            
+            # Помечаем как посещенную
+            visited[y, x] = True
+            
+            # Если достигли конечной точки, восстанавливаем путь
             if (x, y) == end:
-                return path
-                
-            # Проверяем соседей
-            for dx, dy in neighbors:
+                path = []
+                curr_x, curr_y = x, y
+                while (curr_x, curr_y) != start:
+                    path.append((curr_x, curr_y))
+                    prev_x, prev_y = predecessors[curr_y, curr_x]
+                    curr_x, curr_y = prev_x, prev_y
+                path.append(start)
+                path.reverse()
+                return np.array(path)
+            
+            # Проверяем всех соседей
+            for dx, dy in directions:
                 nx, ny = x + dx, y + dy
                 
-                # Проверяем границы изображения
-                if nx < 0 or ny < 0 or nx >= skeleton.shape[1] or ny >= skeleton.shape[0]:
+                # Проверяем границы
+                if nx < 0 or nx >= width or ny < 0 or ny >= height:
                     continue
+                
+                # Если точка в маске и мы её еще не посещали
+                if mask[ny, nx] > 0 and not visited[ny, nx]:
+                    # Рассчитываем новое расстояние
+                    # Для диагональных движений используем множитель sqrt(2)
+                    weight = weight_matrix[ny, nx]
+                    if dx != 0 and dy != 0:  # диагональное движение
+                        weight *= 1.414  # sqrt(2)
                     
-                # Если точка на скелете и еще не посещена
-                if skeleton[ny, nx] > 0 and not visited[ny, nx]:
-                    visited[ny, nx] = True
-                    queue.append(((nx, ny), path + [(nx, ny)]))
+                    new_dist = dist + weight
+                    
+                    # Если новое расстояние меньше текущего, обновляем
+                    if new_dist < distances[ny, nx]:
+                        distances[ny, nx] = new_dist
+                        predecessors[ny, nx] = [x, y]
+                        heapq.heappush(queue, (new_dist, nx, ny))
         
-        # Если путь не найден, возвращаем все точки скелета
-        y_coords, x_coords = np.where(skeleton > 0)
-        return list(zip(x_coords, y_coords))
-    
-    def _smooth_centerline(self, points: np.ndarray, smoothing: int = 50) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        # Если путь не найден, пытаемся найти ближайшую точку к концу
+        min_dist = np.inf
+        closest_point = None
+        
+        for y in range(height):
+            for x in range(width):
+                if visited[y, x]:
+                    dist_to_end = np.sqrt((x - end[0])**2 + (y - end[1])**2)
+                    if dist_to_end < min_dist:
+                        min_dist = dist_to_end
+                        closest_point = (x, y)
+        
+        if closest_point is not None:
+            # Восстанавливаем путь до ближайшей точки
+            path = []
+            curr_x, curr_y = closest_point
+            while (curr_x, curr_y) != start:
+                path.append((curr_x, curr_y))
+                prev_x, prev_y = predecessors[curr_y, curr_x]
+                curr_x, curr_y = prev_x, prev_y
+            path.append(start)
+            path.reverse()
+            return np.array(path)
+        
+        return None
+
+    def _smooth_path(self, path_points: np.ndarray, smoothing_factor: float = 0.03, window_size: int = 3) -> np.ndarray:
         """
-        Аппроксимирует центральную линию нити сплайном
+        Улучшенное сглаживание пути с двухэтапной фильтрацией
+        """
+        if len(path_points) < 4:
+            return path_points
+            
+        try:
+            # 1. Предварительное сглаживание скользящим окном
+            x = path_points[:, 0].copy().astype(float)
+            y = path_points[:, 1].copy().astype(float)
+            
+            # Применяем фильтр скользящего среднего
+            kernel = np.ones(window_size) / window_size
+            x_smooth = np.convolve(x, kernel, mode='same')
+            y_smooth = np.convolve(y, kernel, mode='same')
+            
+            # Сохраняем исходные значения для краевых точек
+            half_win = window_size // 2
+            x_smooth[:half_win] = x[:half_win]
+            x_smooth[-half_win:] = x[-half_win:]
+            y_smooth[:half_win] = y[:half_win]
+            y_smooth[-half_win:] = y[-half_win:]
+            
+            pre_smoothed = np.column_stack((x_smooth, y_smooth))
+            
+            # 2. Финальное сглаживание сплайном с адаптивным параметром
+            points_count = len(pre_smoothed)
+            # Адаптивный параметр сглаживания в зависимости от длины пути
+            s = smoothing_factor * points_count
+            
+            # Используем сплайн с параметром сглаживания s
+            tck, u = splprep([pre_smoothed[:, 0], pre_smoothed[:, 1]], s=s)
+            
+            # Генерируем равномерно распределенные точки вдоль сплайна
+            u_new = np.linspace(0, 1, points_count)
+            x_new, y_new = splev(u_new, tck)
+            
+            smoothed_points = np.column_stack((x_new, y_new))
+            return smoothed_points
+        except Exception as e:
+            print(f"Ошибка при сглаживании пути: {e}")
+            return path_points
+
+    
+    def _measure_brightness_along_path(self, gray_image: np.ndarray, path_points: np.ndarray, thickness: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Измеряет яркость вдоль пути
         
         Args:
-            points: Массив точек центральной линии
-            smoothing: Параметр сглаживания сплайна
-            
+            gray_image: Изображение в оттенках серого
+            path_points: Точки пути
+            thickness: Толщина области для измерения яркости
+        
         Returns:
-            Кортеж из массивов x и y координат сглаженной линии
+            Кортеж из (distances, brightness_values)
         """
-        if len(points) < 4:
-            return None
+        num_points = len(path_points)
+        brightness_values = np.zeros(num_points)
+        
+        # Вычисляем расстояния вдоль пути
+        distances = np.zeros(num_points)
+        for i in range(1, num_points):
+            dx = path_points[i, 0] - path_points[i-1, 0]
+            dy = path_points[i, 1] - path_points[i-1, 1]
+            distances[i] = distances[i-1] + np.sqrt(dx*dx + dy*dy)
+        
+        # Измеряем яркость вдоль пути
+        for i in range(num_points):
+            x, y = int(round(path_points[i, 0])), int(round(path_points[i, 1]))
             
-        # Разделяем x и y координаты
-        x = points[:, 0]
-        y = points[:, 1]
+            # Создаем квадратное окно вокруг точки
+            half_thickness = thickness // 2
+            x_min = max(0, x - half_thickness)
+            x_max = min(gray_image.shape[1] - 1, x + half_thickness)
+            y_min = max(0, y - half_thickness)
+            y_max = min(gray_image.shape[0] - 1, y + half_thickness)
+            
+            # Измеряем среднюю яркость в окне
+            if x_min <= x_max and y_min <= y_max:
+                window = gray_image[y_min:y_max+1, x_min:x_max+1]
+                brightness_values[i] = np.mean(window)
         
-        # Используем сплайн для сглаживания
-        tck, u = splprep([x, y], s=smoothing)
-        
-        # Генерируем равномерно распределенные точки вдоль сплайна
-        u_new = np.linspace(0, 1, 200)
-        x_new, y_new = splev(u_new, tck)
-        return np.array([x_new, y_new])
+        return distances, brightness_values
     
-    def _visualize_results(self, image: np.ndarray, bright_points: np.ndarray) -> np.ndarray:
+    def _visualize_results(self, image: np.ndarray, path_points: np.ndarray, endpoints: Tuple[tuple, tuple]) -> np.ndarray:
         """
         Визуализирует результаты анализа
         
         Args:
             image: Исходное изображение
-            bright_points: Массив координат точек максимальной яркости
-            
+            path_points: Точки сглаженного пути
+            endpoints: Конечные точки нити
+        
         Returns:
             Изображение с визуализацией
         """
-        # Визуализируем линию измерения на изображении
         vis_image = image.copy()
         
-        # Рисуем линию через яркие точки (синим)
-        bright_points_int = bright_points.astype(np.int32)
-        for i in range(10, len(bright_points_int), 10):
-            cv2.arrowedLine(vis_image, tuple(bright_points_int[i-10]), tuple(bright_points_int[i]), (255, 0, 255), 1, 
-                       tipLength=0.5, line_type=cv2.LINE_AA)
-
-        # Добавляем контрольные точки для наглядности
-        for i in range(0, len(bright_points_int), 5):
-            # Контрольная точка на линии ярких точек (синяя точка)
-            cv2.circle(vis_image, tuple(bright_points_int[i]), 2, (255, 0, 0))
+        # Конвертируем точки в целочисленные координаты для рисования
+        path_int = path_points.astype(np.int32)
+        
+        # Рисуем линию пути
+        for i in range(1, len(path_int)):
+            cv2.line(vis_image, tuple(path_int[i-1]), tuple(path_int[i]), (0, 255, 0), 1, cv2.LINE_AA)
+        
+        # Рисуем стрелки направления каждые N точек
+        # arrow_step = max(1, len(path_int) // 20)
+        # for i in range(arrow_step, len(path_int), arrow_step):
+        #     cv2.arrowedLine(vis_image, tuple(path_int[i-arrow_step]), tuple(path_int[i]), 
+        #                     (255, 0, 255), 1, tipLength=0.3, line_type=cv2.LINE_AA)
+        
+        # Отмечаем начальную и конечную точки
+        cv2.circle(vis_image, endpoints[0], 5, (255, 0, 0), -1)  # Начало - синий
+        cv2.circle(vis_image, endpoints[1], 5, (0, 0, 255), -1)  # Конец - красный
+        
+        # Добавляем метки
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(vis_image, "Start", (endpoints[0][0] + 5, endpoints[0][1] - 5), 
+                   font, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(vis_image, "End", (endpoints[1][0] + 5, endpoints[1][1] - 5), 
+                   font, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
         
         return vis_image
     
@@ -505,4 +588,3 @@ class ThreadBrightnessAnalyzer(QThread):
         """Останавливает поток анализа"""
         self.running = False
         self.wait()
-
