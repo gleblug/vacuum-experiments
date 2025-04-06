@@ -227,7 +227,7 @@ class ThreadBrightnessAnalyzer(QThread):
             
             self.msleep(100)
 
-    def analyze(self, image: np.ndarray, thread_mask: np.ndarray, thickness: int = 3) -> Tuple[Optional[Tuple[np.ndarray, np.ndarray]], Optional[np.ndarray]]:
+    def analyze(self, image: np.ndarray, wire_mask: np.ndarray, thickness: int = 3) -> Tuple[Optional[Tuple[np.ndarray, np.ndarray]], Optional[np.ndarray]]:
         """
         Анализирует изображение и строит график яркости вдоль нити
         
@@ -240,7 +240,7 @@ class ThreadBrightnessAnalyzer(QThread):
             Кортеж из (distances, brightness_values)
         """        
         # Получаем скелет маски нити
-        skeleton = self._get_skeleton(thread_mask)
+        skeleton = self._get_skeleton(wire_mask)
         
         # Получаем упорядоченные точки центральной линии нити
         centerline_points = self._get_centerline_points(skeleton)

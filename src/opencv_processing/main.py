@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
             
             cv2.imwrite(f"{base_name}_original.png", self.video_thread.original_frame)
             cv2.imwrite(f"{base_name}_roi.png", self.video_thread.current_roi)
-            cv2.imwrite(f"{base_name}_mask.png", self.video_thread.current_mask)
+            # cv2.imwrite(f"{base_name}_mask.png", self.video_thread.current_mask)
             cv2.imwrite(f"{base_name}_analysis.png", self.analyzer.result_image)
             
             self.graph_app.canvas.fig.savefig(f"{base_name}_graph.png", dpi=300, bbox_inches='tight')
