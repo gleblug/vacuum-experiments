@@ -564,13 +564,7 @@ class ThreadBrightnessAnalyzer(QThread):
         # Рисуем линию пути
         for i in range(1, len(path_int)):
             cv2.line(vis_image, tuple(path_int[i-1]), tuple(path_int[i]), (0, 255, 0), 1, cv2.LINE_AA)
-        
-        # Рисуем стрелки направления каждые N точек
-        # arrow_step = max(1, len(path_int) // 20)
-        # for i in range(arrow_step, len(path_int), arrow_step):
-        #     cv2.arrowedLine(vis_image, tuple(path_int[i-arrow_step]), tuple(path_int[i]), 
-        #                     (255, 0, 255), 1, tipLength=0.3, line_type=cv2.LINE_AA)
-        
+                
         # Отмечаем начальную и конечную точки
         cv2.circle(vis_image, endpoints[0], 5, (255, 0, 0), -1)  # Начало - синий
         cv2.circle(vis_image, endpoints[1], 5, (0, 0, 255), -1)  # Конец - красный
